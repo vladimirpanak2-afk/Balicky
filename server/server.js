@@ -3,6 +3,7 @@ const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
+const { Firestore } = require("@google-cloud/firestore");
 const XLSX = require("xlsx");
 
 const app = express();
@@ -12,6 +13,11 @@ const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
   : path.join(ROOT, "data");
 const SESSION_FILE = path.join(DATA_DIR, "sessions.json");
+const SESSION_BACKEND = String(process.env.SESSION_BACKEND || "").toLowerCase();
+const USE_FIRESTORE =
+  SESSION_BACKEND === "firestore" ||
+  (!SESSION_BACKEND && !!process.env.K_SERVICE);
+let firestore = null;
 
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
@@ -29,6 +35,47 @@ function readJsonSafe(filePath, fallback) {
 function writeJsonSafe(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf8");
+}
+
+if (USE_FIRESTORE) {
+  try {
+    firestore = new Firestore();
+    console.log("Session backend: Firestore");
+  } catch (err) {
+    console.warn("Firestore init failed, using file sessions backend.", err);
+    firestore = null;
+  }
+} else {
+  console.log("Session backend: file");
+}
+
+async function getSessionByKey(key) {
+  if (firestore) {
+    const doc = await firestore.collection("sessions").doc(key).get();
+    return doc.exists ? doc.data() : null;
+  }
+  const sessions = readJsonSafe(SESSION_FILE, {});
+  return sessions[key] || null;
+}
+
+async function setSessionByKey(key, value) {
+  if (firestore) {
+    await firestore.collection("sessions").doc(key).set(value);
+    return;
+  }
+  const sessions = readJsonSafe(SESSION_FILE, {});
+  sessions[key] = value;
+  writeJsonSafe(SESSION_FILE, sessions);
+}
+
+async function deleteSessionByKey(key) {
+  if (firestore) {
+    await firestore.collection("sessions").doc(key).delete();
+    return;
+  }
+  const sessions = readJsonSafe(SESSION_FILE, {});
+  delete sessions[key];
+  writeJsonSafe(SESSION_FILE, sessions);
 }
 
 function loadGlobalArrayFromScript(filePath, variableName) {
@@ -136,19 +183,24 @@ app.get("/api/data/:country", (req, res) => {
   res.json(payload);
 });
 
-app.get("/api/session", (req, res) => {
+app.get("/api/session", async (req, res) => {
   const country = String(req.query.country || "sk").toLowerCase();
   const user = String(req.query.user || "").trim();
   const pm = String(req.query.pm || "").trim();
   if (!user || !pm) {
     return res.status(400).json({ error: "Missing user or pm query parameter." });
   }
-  const sessions = readJsonSafe(SESSION_FILE, {});
-  const key = sessionKey(country, user, pm);
-  return res.json({ session: sessions[key] || null });
+  try {
+    const key = sessionKey(country, user, pm);
+    const session = await getSessionByKey(key);
+    return res.json({ session: session || null });
+  } catch (err) {
+    console.error("GET /api/session failed", err);
+    return res.status(500).json({ error: "Failed to load session." });
+  }
 });
 
-app.put("/api/session", (req, res) => {
+app.put("/api/session", async (req, res) => {
   const country = String(req.body.country || "sk").toLowerCase();
   const user = String(req.body.user || "").trim();
   const pm = String(req.body.pm || "").trim();
@@ -157,30 +209,36 @@ app.put("/api/session", (req, res) => {
     return res.status(400).json({ error: "Missing country, user, pm or session." });
   }
 
-  const sessions = readJsonSafe(SESSION_FILE, {});
-  const key = sessionKey(country, user, pm);
-  sessions[key] = {
-    ...session,
-    country,
-    savedBy: user,
-    savedAt: new Date().toISOString(),
-  };
-  writeJsonSafe(SESSION_FILE, sessions);
-  return res.json({ ok: true });
+  try {
+    const key = sessionKey(country, user, pm);
+    await setSessionByKey(key, {
+      ...session,
+      country,
+      savedBy: user,
+      savedAt: new Date().toISOString(),
+    });
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("PUT /api/session failed", err);
+    return res.status(500).json({ error: "Failed to save session." });
+  }
 });
 
-app.delete("/api/session", (req, res) => {
+app.delete("/api/session", async (req, res) => {
   const country = String(req.query.country || "sk").toLowerCase();
   const user = String(req.query.user || "").trim();
   const pm = String(req.query.pm || "").trim();
   if (!user || !pm) {
     return res.status(400).json({ error: "Missing user or pm query parameter." });
   }
-  const sessions = readJsonSafe(SESSION_FILE, {});
-  const key = sessionKey(country, user, pm);
-  delete sessions[key];
-  writeJsonSafe(SESSION_FILE, sessions);
-  return res.json({ ok: true });
+  try {
+    const key = sessionKey(country, user, pm);
+    await deleteSessionByKey(key);
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("DELETE /api/session failed", err);
+    return res.status(500).json({ error: "Failed to delete session." });
+  }
 });
 
 app.listen(PORT, () => {

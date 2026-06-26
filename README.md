@@ -11,20 +11,67 @@ npm start
 
 Aplikace bezi na `http://localhost:8787`.
 
-## Produkcni nasazeni (Render)
+## Nasazeni na Google Cloud Run
 
-Repo obsahuje `render.yaml`, takze Render si nastaveni nacte automaticky.
+### 1) Predpoklady
 
-1. Otevri [Render Dashboard](https://dashboard.render.com/)
-2. **New +** -> **Blueprint**
-3. Vyber repo `vladimirpanak2-afk/Balicky`
-4. Potvrd nasazeni
-5. Pockej na build a ziskej verejny URL odkaz
+- Google Cloud projekt s povolenym billingem.
+- Nainstalovany Google Cloud CLI (`gcloud`).
+- Prihlaseni v CLI:
 
-Poznamky:
-- `DATA_DIR` je nastaven na `/var/data`, kde se drzi `sessions.json` (rozpracovana prace).
-- SK data se nactou z `balicky_sk.xlsx` + `katalog.js`.
-- Pro CZ staci do repa pridat `balicky_cz.xlsx` (pripadne `balicky_cz.js`) a `katalog_cz.js`.
+```bash
+gcloud auth login
+gcloud config set project TVUJ_PROJECT_ID
+```
+
+### 2) Zapni potrebne sluzby
+
+```bash
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com firestore.googleapis.com
+```
+
+### 3) Inicializuj Firestore (Native mode)
+
+V Google Cloud konzoli otevri Firestore a vytvor databazi v **Native mode**.
+
+### 4) Nasad aplikaci na Cloud Run
+
+Spust z rootu repozitare:
+
+```bash
+gcloud run deploy balicky-app ^
+  --source . ^
+  --region europe-central2 ^
+  --allow-unauthenticated ^
+  --set-env-vars SESSION_BACKEND=firestore
+```
+
+Poznamka: Na Linux/macOS pouzij `\` misto `^` na konci radku.
+
+### 5) Otestuj produkcni URL
+
+Po deploy vypise Cloud Run URL, napr.:
+
+`https://balicky-app-xxxxx-ew.a.run.app`
+
+Zkontroluj:
+
+- `GET /api/health`
+- otevreni root URL v prohlizeci
+
+## Session backendy
+
+Server umi 2 rezimy:
+
+- `SESSION_BACKEND=firestore` -> produkce na Google (doporuceno)
+- bez promenne -> lokalni `data/sessions.json`
+
+Cloud Run nema perzistentni disk pro vice instanci, proto je Firestore pro sdilenou rozpracovanou praci nutny.
+
+## Data soubory
+
+- SK: `balicky_sk.xlsx` + `katalog.js`
+- CZ: pridej `balicky_cz.xlsx` (nebo `balicky_cz.js`) + `katalog_cz.js`
 
 ## API
 
