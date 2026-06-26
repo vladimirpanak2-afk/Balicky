@@ -8,7 +8,9 @@ const XLSX = require("xlsx");
 const app = express();
 const PORT = Number(process.env.PORT || 8787);
 const ROOT = path.resolve(__dirname, "..");
-const DATA_DIR = path.join(ROOT, "data");
+const DATA_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.join(ROOT, "data");
 const SESSION_FILE = path.join(DATA_DIR, "sessions.json");
 
 app.use(cors());
