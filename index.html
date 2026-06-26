@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aktualizace balíčků</title>
+<!-- verze: 2026-06-25 -->
+
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="katalog.js" onerror="window.KATALOG_MISSING=true"></script>
+<script src="balicky.js" onerror="window.BALICKY_MISSING=true"></script>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <h1>Aktualizace balíčků</h1>
+  <span class="pm" id="hPm"></span>
+  <span class="pm" id="hSaved" style="opacity:.85;font-size:12px"></span>
+  <button id="hExport" class="hidden" onclick="exportXlsx()">💾 Uložit změny</button>
+  <button id="hReset" class="hidden sec" style="background:transparent;border:1px solid #fff;color:#fff" onclick="location.reload()">Začít znovu</button>
+</header>
+
+<div class="wrap" id="app"></div>
+
+<!-- search modal -->
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <h3 id="mTitle">Najít aktuální položku</h3>
+    <p class="sub" id="mSub"></p>
+    <input type="text" id="mSearch" placeholder="Hledat podle názvu nebo ID…" oninput="renderResults()" autocomplete="off">
+    <div class="results" id="mResults"></div>
+    <div class="opt">
+      <input type="checkbox" id="mPropagate" checked>
+      <label for="mPropagate" style="font-weight:400;margin:0">Při záměně nahradit tuto starou položku i ve všech ostatních balíčcích</label>
+    </div>
+    <div class="modal-foot">
+      <button class="btn sec" onclick="closeModal()">Zrušit</button>
+      <button class="btn" id="mConfirm" disabled onclick="confirmPick()">Potvrdit</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
