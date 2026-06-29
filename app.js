@@ -513,6 +513,10 @@ function screenPkg(){
     let act='', sug='';
     if(del){
       act=`<div class="row-actions"><button class="btn sm sec" onclick="undoRow(${r.__i})">Vrátit</button></div>`;
+    } else if(done){
+      act = r.__undo
+        ? `<div class="row-actions"><button class="btn sm sec" onclick="undoDone(${r.__i})">Vrátit</button></div>`
+        : '';
     } else if(old&&!done){
       act=`<div class="row-actions">
         <button class="btn sm" onclick="openModal('replace',${r.__i})">Zaměnit</button>
@@ -598,10 +602,12 @@ function applyReplace(old,pick,propagate){
   const before=targets.map(r=>({__i:r.__i,id:r[COL.id],name:r[COL.name],inactive:r[COL.inactive],status:r.__status}));
   const meta=snapshotMeta();
   targets.forEach(r=>{
+    const prev={id:r[COL.id],name:r[COL.name],inactive:r[COL.inactive],status:r.__status};
     LOG.push({cas:now(),pm:CURRENT_PM,akce:'záměna',balicek:r[COL.pkg],
       stara_id:r[COL.id],stary_nazev:r[COL.name],nova_id:pick.id,novy_nazev:pick.name,
       propagace:(propagate&&r!==old)?'ano':''});
     r[COL.id]=pick.id; r[COL.name]=pick.name; r[COL.inactive]=0; r.__status='done';
+    r.__undo={type:'replace',prev};
     markModified(r[COL.pkg],r[COL.pm]);
   });
   setUndoAction(()=>{
@@ -620,8 +626,10 @@ function applyAdd(old,pick){
   const prev={__i:old.__i,status:old.__status};
   const newRow={__i:DATA.length,__status:'done',
     [COL.pkg]:old[COL.pkg],[COL.id]:pick.id,[COL.name]:pick.name,[COL.inactive]:0,[COL.pm]:CURRENT_PM};
+  newRow.__undo={type:'removeRow'};
   DATA.push(newRow);
   old.__status='done';
+  old.__undo={type:'add',addedI:newRow.__i,prevStatus:prev.status};
   markModified(old[COL.pkg],CURRENT_PM);
   LOG.push({cas:now(),pm:CURRENT_PM,akce:'přidání',balicek:old[COL.pkg],
     stara_id:old[COL.id],stary_nazev:old[COL.name],nova_id:pick.id,novy_nazev:pick.name,propagace:''});
@@ -637,6 +645,7 @@ function applyAddNew(pick){
   const meta=snapshotMeta();
   const newRow={__i:DATA.length,__status:'done',
     [COL.pkg]:modalCtx.pkg,[COL.id]:pick.id,[COL.name]:pick.name,[COL.inactive]:0,[COL.pm]:CURRENT_PM};
+  newRow.__undo={type:'removeRow'};
   DATA.push(newRow);
   markModified(modalCtx.pkg,CURRENT_PM);
   LOG.push({cas:now(),pm:CURRENT_PM,akce:'přidání nové',balicek:modalCtx.pkg,
@@ -656,6 +665,28 @@ function confirmPick(){
   else applyAdd(old,picked);
   closeModal(); screenPkg();
 }
+function undoDone(i){
+  const r=DATA.find(x=>x.__i===i); if(!r||!r.__undo) return;
+  const u=r.__undo;
+  if(u.type==='replace' && u.prev){
+    r[COL.id]=u.prev.id; r[COL.name]=u.prev.name; r[COL.inactive]=u.prev.inactive; r.__status=u.prev.status||'';
+    delete r.__undo;
+    LOG.push({cas:now(),pm:CURRENT_PM,akce:'vrácení záměny',balicek:r[COL.pkg],
+      stara_id:'',stary_nazev:'',nova_id:'',novy_nazev:'',propagace:''});
+  } else if(u.type==='add'){
+    DATA=DATA.filter(x=>x.__i!==u.addedI);
+    r.__status=u.prevStatus||''; delete r.__undo;
+    LOG.push({cas:now(),pm:CURRENT_PM,akce:'vrácení přidání',balicek:r[COL.pkg],
+      stara_id:'',stary_nazev:'',nova_id:'',novy_nazev:'',propagace:''});
+  } else if(u.type==='removeRow'){
+    const pkg=r[COL.pkg];
+    DATA=DATA.filter(x=>x.__i!==i);
+    LOG.push({cas:now(),pm:CURRENT_PM,akce:'odebrání přidané položky',balicek:pkg,
+      stara_id:'',stary_nazev:'',nova_id:'',novy_nazev:'',propagace:''});
+  }
+  clearUndoAction();
+  scheduleSave(); screenPkg();
+}
 // rychlá záměna kliknutím na navržený štítek
 function quickReplace(i,k){
   const r=DATA.find(x=>x.__i===i); const pick=(SUG[i]||[])[k];
@@ -673,6 +704,7 @@ function deleteRow(i){
   const meta=snapshotMeta();
   const prev=r.__status;
   r.__status='deleted'; markModified(r[COL.pkg],r[COL.pm]);
+  delete r.__undo;
   LOG.push({cas:now(),pm:CURRENT_PM,akce:'smazání položky',balicek:r[COL.pkg],
     stara_id:r[COL.id],stary_nazev:r[COL.name],nova_id:'',novy_nazev:'',propagace:''});
   setUndoAction(()=>{
@@ -687,6 +719,7 @@ function undoRow(i){
   const meta=snapshotMeta();
   const prev=r.__status;
   r.__status='';
+  delete r.__undo;
   LOG.push({cas:now(),pm:CURRENT_PM,akce:'vrácení smazání',balicek:r[COL.pkg],
     stara_id:r[COL.id],stary_nazev:r[COL.name],nova_id:'',novy_nazev:'',propagace:''});
   setUndoAction(()=>{
