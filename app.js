@@ -354,7 +354,7 @@ function screenLoad(){
   document.getElementById('app').innerHTML = `
     <div class="center">
       <h2>Aktualizace produktových balíčků</h2>
-      <p>Data balíčků se načítají automaticky ze serveru. Přihlaste se uživatelem a PINem.</p>
+      <p>Přihlaste se uživatelem a PINem.</p>
       <div class="card" style="text-align:left;margin-bottom:14px">
         <label>Země</label>
         <select id="countrySel">
