@@ -5,7 +5,8 @@ let CATALOG=[];       // [{id, name}] zdroj pro výběr náhrad
 let CATALOG_CUSTOM=false;
 let CURRENT_PM=null;
 let CURRENT_COUNTRY='sk';
-let CURRENT_USER='demo.user';
+let CURRENT_USER='';
+let CURRENT_USER_NAME='';
 let CURRENT_PKG=null;
 let LOG=[];           // [{cas, pm, akce, balicek, stara_id, stary_nazev, nova_id, novy_nazev, propagace}]
 let MODIFIED=new Map();// název balíčku -> Set(PM), kteří balíček změnili (pro ERP import = kompletní stav)
@@ -29,6 +30,27 @@ async function apiJson(path,opt){
     if(!r.ok) return null;
     return await r.json();
   }catch(e){ return null; }
+}
+function restoreAuthFromStorage(){
+  CURRENT_USER=localStorage.getItem('balicky_login')||'';
+  CURRENT_USER_NAME=localStorage.getItem('balicky_user_name')||'';
+}
+function saveAuthToStorage(login,name){
+  CURRENT_USER=String(login||'').trim().toLowerCase();
+  CURRENT_USER_NAME=String(name||'').trim();
+  localStorage.setItem('balicky_login',CURRENT_USER);
+  localStorage.setItem('balicky_user_name',CURRENT_USER_NAME);
+}
+async function loginUser(login,pin){
+  const r=await apiJson(`${API_BASE}/auth/login`,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({login,pin})
+  });
+  if(!r||!r.ok||!r.user) return false;
+  const full=[r.user.lastName,r.user.firstName].filter(Boolean).join(' ').trim();
+  saveAuthToStorage(r.user.login,full||r.user.login);
+  return true;
 }
 async function loadServerData(){
   const d=await apiJson(`${API_BASE}/data/${CURRENT_COUNTRY}`);
@@ -168,7 +190,7 @@ async function idbGet(k){ try{ const db=await idb(); return new Promise(res=>{ c
 async function idbDel(k){ try{ const db=await idb(); db.transaction(STORE,'readwrite').objectStore(STORE).delete(k); }catch(e){} }
 
 function serializeSession(){
-  return {v:1, savedAt:new Date().toISOString(), pm:CURRENT_PM, country:CURRENT_COUNTRY, user:CURRENT_USER, filename:FILENAME,
+  return {v:1, savedAt:new Date().toISOString(), pm:CURRENT_PM, country:CURRENT_COUNTRY, user:CURRENT_USER, user_name:CURRENT_USER_NAME, filename:FILENAME,
     data:DATA, log:LOG,
     modified:[...MODIFIED.entries()].map(([k,s])=>[k,[...s]]),
     deleted:[...DELETED_PKGS.entries()]};
@@ -177,7 +199,8 @@ function restoreSession(s){
   DATA=(s.data||[]).map((r,i)=>({__i:(r.__i!=null?r.__i:i),__status:r.__status||'',...r}));
   LOG=s.log||[]; FILENAME=s.filename||FILENAME; CURRENT_PM=s.pm||null;
   CURRENT_COUNTRY=(s.country||CURRENT_COUNTRY||'sk').toLowerCase();
-  CURRENT_USER=s.user||CURRENT_USER||'demo.user';
+  CURRENT_USER=(s.user||CURRENT_USER||'').toLowerCase();
+  CURRENT_USER_NAME=s.user_name||CURRENT_USER_NAME||CURRENT_USER;
   MODIFIED=new Map((s.modified||[]).map(([k,a])=>[k,new Set(a)]));
   DELETED_PKGS=new Map(s.deleted||[]);
 }
@@ -230,7 +253,7 @@ function loadSessionFile(ev){
   r.readAsText(f);
 }
 function afterRestore(){
-  document.getElementById('hPm').textContent='PM: '+(CURRENT_PM||'')+' · '+CURRENT_COUNTRY.toUpperCase()+' · '+CURRENT_USER;
+  document.getElementById('hPm').textContent='PM vlastník: '+(CURRENT_PM||'')+' · '+CURRENT_COUNTRY.toUpperCase()+' · uživatel: '+(CURRENT_USER_NAME||CURRENT_USER);
   document.getElementById('hExport').classList.remove('hidden');
   document.getElementById('hReset').classList.remove('hidden');
   scheduleSave(); screenPkgs();
@@ -241,57 +264,56 @@ function screenLoad(){
   document.getElementById('app').innerHTML = `
     <div class="center">
       <h2>Aktualizace produktových balíčků</h2>
-      <p>Vyberte zemi + uživatele a načtěte data ze serveru. Případně můžete ručně nahrát xlsx.</p>
+      <p>Data balíčků se načítají automaticky ze serveru. Přihlaste se uživatelem a PINem.</p>
       <div class="card" style="text-align:left;margin-bottom:14px">
         <label>Země</label>
         <select id="countrySel">
           <option value="sk">Slovensko (SK)</option>
           <option value="cz">Česko (CZ)</option>
         </select>
-        <label style="margin-top:10px">Uživatel (login/e-mail)</label>
-        <input type="text" id="userInput" placeholder="napr. jan.novak@firma.cz">
+        <label style="margin-top:10px">Login (prijmeni.jmeno)</label>
+        <input type="text" id="loginInput" placeholder="napr. novak.jan">
+        <label style="margin-top:10px">PIN (6 číslic)</label>
+        <input type="password" id="pinInput" placeholder="••••••" maxlength="6" inputmode="numeric" pattern="[0-9]*">
         <div style="margin-top:10px;display:flex;gap:8px">
-          <button class="btn" id="loadServerBtn">Načíst data ze serveru</button>
+          <button class="btn" id="loginBtn">Přihlásit a načíst</button>
         </div>
       </div>
-      <div class="drop" id="drop">
-        Klikněte nebo přetáhněte sem<br><b>balicky_sk.xlsx / balicky_cz.xlsx</b>
-        <input type="file" id="file" accept=".xlsx,.xls" class="hidden">
-      </div>
     </div>`;
-  const drop=document.getElementById('drop'), file=document.getElementById('file');
   const countrySel=document.getElementById('countrySel');
-  const userInput=document.getElementById('userInput');
-  const loadServerBtn=document.getElementById('loadServerBtn');
+  const loginInput=document.getElementById('loginInput');
+  const pinInput=document.getElementById('pinInput');
+  const loginBtn=document.getElementById('loginBtn');
   countrySel.value=(localStorage.getItem('balicky_country')||'sk').toLowerCase();
-  userInput.value=localStorage.getItem('balicky_user')||'demo.user';
-  const applyIdentity=()=>{
+  restoreAuthFromStorage();
+  loginInput.value=CURRENT_USER||'';
+  const applyCountry=()=>{
     CURRENT_COUNTRY=countrySel.value.toLowerCase();
-    CURRENT_USER=(userInput.value||'demo.user').trim();
     localStorage.setItem('balicky_country',CURRENT_COUNTRY);
-    localStorage.setItem('balicky_user',CURRENT_USER);
   };
-  loadServerBtn.onclick=async()=>{
-    applyIdentity();
+  const loadAfterLogin=async()=>{
     const ok=await loadServerData();
     if(ok){ screenPm(); return; }
-    if(window.BALICKY && window.BALICKY.length){
-      loadBalickyData(window.BALICKY); screenPm(); return;
-    }
-    alert('Serverova data se nepodarilo nacist a lokalni balicky.js chybi.');
+    alert('Serverova data se nepodarilo nacist. Zkuste to prosim znovu.');
   };
-  drop.onclick=()=>file.click();
-  file.onchange=e=>{ if(e.target.files[0]) readFile(e.target.files[0]); };
-  drop.ondragover=e=>{e.preventDefault();drop.style.background='#fff5f6';};
-  drop.ondragleave=()=>drop.style.background='';
-  drop.ondrop=e=>{e.preventDefault();drop.style.background='';if(e.dataTransfer.files[0])readFile(e.dataTransfer.files[0]);};
+  loginBtn.onclick=async()=>{
+    applyCountry();
+    const login=(loginInput.value||'').trim().toLowerCase();
+    const pin=(pinInput.value||'').trim();
+    if(!login){ alert('Zadejte login.'); return; }
+    if(!/^\d{6}$/.test(pin)){ alert('PIN musi mit 6 cislic.'); return; }
+    const ok=await loginUser(login,pin);
+    if(!ok){ alert('Neplatny login nebo PIN.'); return; }
+    pinInput.value='';
+    await loadAfterLogin();
+  };
   // tiche nacteni pro rychly start
   (async()=>{
-    applyIdentity();
-    if(!CATALOG_CUSTOM && window.KATALOG && window.KATALOG.length) buildCatalogFromKatalog(window.KATALOG);
-    const ok=await loadServerData();
-    if(ok){ screenPm(); return; }
-    if(window.BALICKY && window.BALICKY.length){ loadBalickyData(window.BALICKY); screenPm(); }
+    applyCountry();
+    if(CURRENT_USER){
+      if(!CATALOG_CUSTOM && window.KATALOG && window.KATALOG.length) buildCatalogFromKatalog(window.KATALOG);
+      await loadAfterLogin();
+    }
   })();
 }
 // automatické načtení balíčků z balicky.js (window.BALICKY = [[ID_BALICKU,ID_POLOZKY,NAZEV,NEAKTIVNI,PM],...])
@@ -335,16 +357,16 @@ function screenPm(){
   const pms=[...new Set(DATA.map(r=>r[COL.pm]).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'cs'));
   document.getElementById('app').innerHTML=`
     <div class="center">
-      <h2>Kdo jste?</h2>
-      <p>Vyberte svého produktového manažera. Zobrazí se jen vaše balíčky.</p>
-      <label>Produktový manažer</label>
+      <h2>Vyberte vlastníka balíčků (PM)</h2>
+      <p>Přihlášený uživatel může upravovat balíčky libovolného PM vlastníka.</p>
+      <label>Vlastník balíčků (PM)</label>
       <select id="pmSel">${pms.map(p=>`<option>${esc(p)}</option>`).join('')}</select>
       <div style="margin-top:18px"><button class="btn" onclick="pickPm()">Pokračovat →</button></div>
     </div>`;
 }
 async function pickPm(){
   CURRENT_PM=document.getElementById('pmSel').value;
-  document.getElementById('hPm').textContent='PM: '+CURRENT_PM+' · '+CURRENT_COUNTRY.toUpperCase()+' · '+CURRENT_USER;
+  document.getElementById('hPm').textContent='PM vlastník: '+CURRENT_PM+' · '+CURRENT_COUNTRY.toUpperCase()+' · uživatel: '+(CURRENT_USER_NAME||CURRENT_USER);
   document.getElementById('hExport').classList.remove('hidden');
   document.getElementById('hReset').classList.remove('hidden');
   const restored=await loadSavedSessionForPm();

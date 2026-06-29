@@ -13,11 +13,13 @@ const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
   : path.join(ROOT, "data");
 const SESSION_FILE = path.join(DATA_DIR, "sessions.json");
+const USERS_FILE = path.join(DATA_DIR, "users.json");
 const SESSION_BACKEND = String(process.env.SESSION_BACKEND || "").toLowerCase();
 const USE_FIRESTORE =
   SESSION_BACKEND === "firestore" ||
   (!SESSION_BACKEND && !!process.env.K_SERVICE);
 let firestore = null;
+const DATASET_CACHE = new Map();
 
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
@@ -78,6 +80,41 @@ async function deleteSessionByKey(key) {
   writeJsonSafe(SESSION_FILE, sessions);
 }
 
+function normalizeLogin(login) {
+  return String(login || "").trim().toLowerCase();
+}
+
+function sanitizeUser(user) {
+  if (!user) return null;
+  return {
+    login: normalizeLogin(user.login),
+    firstName: String(user.firstName || "").trim(),
+    lastName: String(user.lastName || "").trim(),
+    active: user.active !== false,
+  };
+}
+
+async function getUserByLogin(loginRaw) {
+  const login = normalizeLogin(loginRaw);
+  if (!login) return null;
+  if (firestore) {
+    const doc = await firestore.collection("users").doc(login).get();
+    return doc.exists ? doc.data() : null;
+  }
+  const users = readJsonSafe(USERS_FILE, []);
+  return users.find((u) => normalizeLogin(u.login) === login) || null;
+}
+
+async function verifyUser(loginRaw, pinRaw) {
+  const login = normalizeLogin(loginRaw);
+  const pin = String(pinRaw || "").trim();
+  if (!login || !/^\d{6}$/.test(pin)) return null;
+  const user = await getUserByLogin(login);
+  if (!user || user.active === false) return null;
+  if (String(user.pin || "") !== pin) return null;
+  return sanitizeUser(user);
+}
+
 function loadGlobalArrayFromScript(filePath, variableName) {
   if (!fs.existsSync(filePath)) return null;
   const code = fs.readFileSync(filePath, "utf8");
@@ -112,6 +149,12 @@ function firstExisting(paths) {
   return paths.find((filePath) => fs.existsSync(filePath)) || null;
 }
 
+function fileStamp(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return "missing";
+  const s = fs.statSync(filePath);
+  return `${path.basename(filePath)}:${s.size}:${Math.floor(s.mtimeMs)}`;
+}
+
 function loadPackagesFromXlsx(filePath) {
   if (!filePath || !fs.existsSync(filePath)) return null;
   const wb = XLSX.readFile(filePath, { cellDates: false });
@@ -128,14 +171,24 @@ function loadPackagesFromXlsx(filePath) {
 }
 
 function loadDataset(country) {
-  const files = datasetFiles(country);
+  const keyCountry = String(country || "sk").toLowerCase();
+  const files = datasetFiles(keyCountry);
   const catalogFile = firstExisting(files.catalog);
   const packagesFile = firstExisting(files.packages);
   const xlsxFallback = firstExisting([
-    path.join(ROOT, `balicky_${String(country || "sk").toLowerCase()}.xlsx`),
+    path.join(ROOT, `balicky_${keyCountry}.xlsx`),
     path.join(ROOT, "balicky_sk.xlsx"),
     path.join(ROOT, "balicky.xlsx"),
   ]);
+  const version = [
+    fileStamp(catalogFile),
+    fileStamp(packagesFile),
+    fileStamp(xlsxFallback),
+  ].join("|");
+
+  const cached = DATASET_CACHE.get(keyCountry);
+  if (cached && cached.version === version) return cached.payload;
+
   const catalog = catalogFile
     ? loadGlobalArrayFromScript(catalogFile, "KATALOG")
     : null;
@@ -146,8 +199,8 @@ function loadDataset(country) {
     packages = loadPackagesFromXlsx(xlsxFallback) || [];
   }
 
-  return {
-    country: String(country || "sk").toLowerCase(),
+  const payload = {
+    country: keyCountry,
     catalog: catalog || [],
     packages: packages || [],
     files: {
@@ -159,6 +212,8 @@ function loadDataset(country) {
         : null,
     },
   };
+  DATASET_CACHE.set(keyCountry, { version, payload });
+  return payload;
 }
 
 function sessionKey(country, user, pm) {
@@ -176,6 +231,22 @@ app.get("/api/countries", (_req, res) => {
       { code: "cz", label: "Cesko" },
     ],
   });
+});
+
+app.post("/api/auth/login", async (req, res) => {
+  const login = req.body?.login;
+  const pin = req.body?.pin;
+  if (!login || !pin) {
+    return res.status(400).json({ error: "Missing login or pin." });
+  }
+  try {
+    const user = await verifyUser(login, pin);
+    if (!user) return res.status(401).json({ error: "Invalid login or pin." });
+    return res.json({ ok: true, user });
+  } catch (err) {
+    console.error("POST /api/auth/login failed", err);
+    return res.status(500).json({ error: "Login failed." });
+  }
 });
 
 app.get("/api/data/:country", (req, res) => {

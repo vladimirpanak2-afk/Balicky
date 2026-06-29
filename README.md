@@ -68,6 +68,25 @@ Server umi 2 rezimy:
 
 Cloud Run nema perzistentni disk pro vice instanci, proto je Firestore pro sdilenou rozpracovanou praci nutny.
 
+## Uzivatele (login + PIN)
+
+Aplikace pouziva prihlaseni:
+
+- login ve formatu `prijmeni.jmeno`
+- `PIN` presne 6 cislic
+
+Backend drzi uzivatele v:
+
+- Firestore kolekci `users` (produkce)
+- nebo lokalne `data/users.json` (lokalni beh)
+
+Pro lokalni test je pripraven uzivatel:
+
+- login: `panak.vladimir`
+- pin: `123456`
+
+Poznamka: pro produkci doporucujeme piny neukladat v plain textu, ale hashovat.
+
 ## Data soubory
 
 - SK: `balicky_sk.xlsx` + `katalog.js`
@@ -77,6 +96,7 @@ Cloud Run nema perzistentni disk pro vice instanci, proto je Firestore pro sdile
 
 - `GET /api/health`
 - `GET /api/countries`
+- `POST /api/auth/login`
 - `GET /api/data/:country`
 - `GET /api/session?country=sk&user=...&pm=...`
 - `PUT /api/session`
