@@ -43,6 +43,17 @@
   </div>
 </div>
 
+<!-- help modal -->
+<div class="overlay" id="helpOverlay" onclick="if(event.target===this) closeHelp()">
+  <div class="modal help-modal">
+    <h3>Nápověda</h3>
+    <div class="help-body" id="helpBody"></div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeHelp()">OK</button>
+    </div>
+  </div>
+</div>
+
 <script src="app.js"></script>
 </body>
 </html>

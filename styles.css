@@ -49,6 +49,10 @@
   .overlay{position:fixed;inset:0;background:rgba(15,20,28,.5);display:none;align-items:flex-start;justify-content:center;z-index:100;padding:40px 16px;overflow:auto}
   .overlay.on{display:flex}
   .modal{background:#fff;border-radius:12px;width:100%;max-width:640px;padding:22px}
+  .help-modal{max-width:760px}
+  .help-body{max-height:65vh;overflow:auto;padding-right:6px;line-height:1.45}
+  .help-body h4{margin:10px 0 6px}
+  .help-body p{margin:0 0 6px}
   .modal h3{margin:0 0 4px}
   .modal .sub{color:var(--muted);margin:0 0 16px;font-size:13px}
   .results{max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:8px;margin-top:10px}

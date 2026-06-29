@@ -61,37 +61,43 @@ function undoLastChange(){
   fn();
 }
 function showHelp(){
-  alert(
-`Jak aplikaci používat:
-1) Přihlaste se loginem (prijmeni.jmeno) a 6místným PINem.
-2) Vyberte PM vlastníka balíčků.
-3) V každém balíčku nahraďte staré položky (ZZZ/!!!) přes Zaměnit nebo návrhy.
-4) Pokud potřebujete, přidejte do balíčku novou položku tlačítkem "➕ Přidat položku".
-5) Pokud uděláte chybu, použijte "Vrátit" u konkrétního řádku.
-6) Po dokončení exportujte soubory pro Agendu.
+  const overlay=document.getElementById('helpOverlay');
+  const body=document.getElementById('helpBody');
+  if(!overlay || !body) return;
+  body.innerHTML = `
+    <h4>Jak aplikaci používat</h4>
+    <p>1) Přihlaste se loginem (prijmeni.jmeno) a 6místným PINem.</p>
+    <p>2) Vyberte PM vlastníka balíčků.</p>
+    <p>3) V každém balíčku nahraďte staré položky (ZZZ/!!!) přes Zaměnit nebo návrhy.</p>
+    <p>4) Pokud potřebujete, přidejte do balíčku novou položku tlačítkem <b>➕ Přidat položku</b>.</p>
+    <p>5) Pokud uděláte chybu, použijte <b>Vrátit</b> u konkrétního řádku.</p>
+    <p>6) Po dokončení exportujte soubory pro Agendu.</p>
 
-Tlačítka exportu:
-- Soubor pro Agendu = export jen právě otevřeného balíčku.
-- Import do Agendy (ZIP po balíčcích) = export všech upravených balíčků najednou.
-- Přehled (XLSX) = kontrolní tabulka pro člověka (není import pro Agendu).
-- Uložit/Načíst rozpracované = ruční záloha a obnova (sekce Pokročilé).
+    <h4>Tlačítka exportu</h4>
+    <p>- Soubor pro Agendu = export jen právě otevřeného balíčku.</p>
+    <p>- Import do Agendy (ZIP po balíčcích) = export všech upravených balíčků najednou.</p>
+    <p>- Přehled (XLSX) = kontrolní tabulka pro člověka (není import pro Agendu).</p>
+    <p>- Uložit/Načíst rozpracované = ruční záloha a obnova (sekce Pokročilé).</p>
 
-Benefity:
-- Když měníte starou položku, můžete stejnou záměnu propagovat i do dalších balíčků, kde se ta položka vyskytuje.
-- Tím výrazně zrychlíte práci a snížíte riziko, že na některý balíček zapomenete.
+    <h4>Benefity</h4>
+    <p>- Když měníte starou položku, můžete stejnou záměnu propagovat i do dalších balíčků, kde se ta položka vyskytuje.</p>
+    <p>- Tím výrazně zrychlíte práci a snížíte riziko, že na některý balíček zapomenete.</p>
 
-Import do Agendy:
-Jakmile máte importní soubor, můžete provést import balíčku do Agendy.
-V zásadě máte 2 možnosti.
-1) Najdete v Agendě balíček, který chcete upravovat, smažete z něj staré položky a následně provedete import balíčku.
-   Importem se přidají nové položky, ty co jsou nezměněné, v balíčku zůstanou beze změny.
-2) Naimportujete balíček jako nový, tedy založíte nový balíček (Název, Popis), provedete jeho import z připraveného souboru
-   a starý původní balíček následně smažete.
+    <h4>Import do Agendy</h4>
+    <p>Jakmile máte importní soubor, můžete provést import balíčku do Agendy.</p>
+    <p>V zásadě máte 2 možnosti:</p>
+    <p>1) Najdete v Agendě balíček, který chcete upravovat, smažete z něj staré položky a následně provedete import balíčku. Importem se přidají nové položky, ty co jsou nezměněné, v balíčku zůstanou beze změny.</p>
+    <p>2) Naimportujete balíček jako nový, tedy založíte nový balíček (Název, Popis), provedete jeho import z připraveného souboru a starý původní balíček následně smažete.</p>
 
-Omezení:
-- Zrušit poslední změnu vrací jen poslední akci (1 krok zpět).
-- Sdílení práce je oddělené podle uživatele; jiný uživatel nevidí vaše rozpracované změny.`
-  );
+    <h4>Omezení</h4>
+    <p>- Zrušit poslední změnu vrací jen poslední akci (1 krok zpět).</p>
+    <p>- Sdílení práce je oddělené podle uživatele; jiný uživatel nevidí vaše rozpracované změny.</p>
+  `;
+  overlay.classList.add('on');
+}
+function closeHelp(){
+  const overlay=document.getElementById('helpOverlay');
+  if(overlay) overlay.classList.remove('on');
 }
 function restoreAuthFromStorage(){
   CURRENT_USER=localStorage.getItem('balicky_login')||'';
