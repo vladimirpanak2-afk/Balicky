@@ -12,6 +12,7 @@ let LAST_UNDO=null;
 let LOG=[];           // [{cas, pm, akce, balicek, stara_id, stary_nazev, nova_id, novy_nazev, propagace}]
 let MODIFIED=new Map();// název balíčku -> Set(PM), kteří balíček změnili (pro ERP import = kompletní stav)
 let DELETED_PKGS=new Map();// název balíčku -> {pm, pocet} smazané celé balíčky (ruční řešení v ERP)
+let PKG_ORIGINAL=new Map();// aktuální název balíčku -> původní název před přejmenováním
 function markModified(pkg,pm){ if(!MODIFIED.has(pkg)) MODIFIED.set(pkg,new Set()); MODIFIED.get(pkg).add(pm); }
 function modifiedPkgsForPm(pm){ return [...MODIFIED.entries()].filter(([n,set])=>set.has(pm)&&!DELETED_PKGS.has(n)).map(([n])=>n); }
 let WB=null, SHEET=null, FILENAME='balicky_sk.xlsx';
@@ -34,12 +35,15 @@ async function apiJson(path,opt){
 }
 function cloneModifiedState(src){ return new Map([...src.entries()].map(([k,s])=>[k,new Set([...s])])); }
 function cloneDeletedState(src){ return new Map([...src.entries()].map(([k,v])=>[k,{...v}])); }
-function snapshotMeta(){ return {logLen:LOG.length, modified:cloneModifiedState(MODIFIED), deleted:cloneDeletedState(DELETED_PKGS)}; }
+function clonePkgOriginal(src){ return new Map([...src.entries()]); }
+function snapshotMeta(){ return {logLen:LOG.length, modified:cloneModifiedState(MODIFIED), deleted:cloneDeletedState(DELETED_PKGS), pkgOriginal:clonePkgOriginal(PKG_ORIGINAL)}; }
 function restoreMeta(meta){
   LOG=LOG.slice(0,meta.logLen);
   MODIFIED=cloneModifiedState(meta.modified);
   DELETED_PKGS=cloneDeletedState(meta.deleted);
+  PKG_ORIGINAL=clonePkgOriginal(meta.pkgOriginal||new Map());
 }
+function originalPkgName(name){ return PKG_ORIGINAL.get(name)||name; }
 function setUndoAction(fn,label){
   LAST_UNDO={fn,label:label||''};
   const b=document.getElementById('hUndo');
@@ -62,12 +66,27 @@ function showHelp(){
 1) Přihlaste se loginem (prijmeni.jmeno) a 6místným PINem.
 2) Vyberte PM vlastníka balíčků.
 3) V každém balíčku nahraďte staré položky (ZZZ/!!!) přes Zaměnit nebo návrhy.
-4) Pokud uděláte chybu, použijte "↶ Zrušit poslední změnu".
-5) Po dokončení exportujte soubory pro Agendu.
+4) Pokud potřebujete, přidejte do balíčku novou položku tlačítkem "➕ Přidat položku".
+5) Pokud uděláte chybu, použijte "Vrátit" u konkrétního řádku.
+6) Po dokončení exportujte soubory pro Agendu.
 
-Stavy balíčku:
-- rozpracováno = balíček je změněný, ale ještě obsahuje staré položky
-- upraveno = všechny staré položky v balíčku jsou vyřešené
+Tlačítka exportu:
+- Soubor pro Agendu = export jen právě otevřeného balíčku.
+- Import do Agendy (ZIP po balíčcích) = export všech upravených balíčků najednou.
+- Přehled (XLSX) = kontrolní tabulka pro člověka (není import pro Agendu).
+- Uložit/Načíst rozpracované = ruční záloha a obnova (sekce Pokročilé).
+
+Benefity:
+- Když měníte starou položku, můžete stejnou záměnu propagovat i do dalších balíčků, kde se ta položka vyskytuje.
+- Tím výrazně zrychlíte práci a snížíte riziko, že na některý balíček zapomenete.
+
+Import do Agendy:
+Jakmile máte importní soubor, můžete provést import balíčku do Agendy.
+V zásadě máte 2 možnosti.
+1) Najdete v Agendě balíček, který chcete upravovat, smažete z něj staré položky a následně provedete import balíčku.
+   Importem se přidají nové položky, ty co jsou nezměněné, v balíčku zůstanou beze změny.
+2) Naimportujete balíček jako nový, tedy založíte nový balíček (Název, Popis), provedete jeho import z připraveného souboru
+   a starý původní balíček následně smažete.
 
 Omezení:
 - Zrušit poslední změnu vrací jen poslední akci (1 krok zpět).
@@ -77,6 +96,24 @@ Omezení:
 function restoreAuthFromStorage(){
   CURRENT_USER=localStorage.getItem('balicky_login')||'';
   CURRENT_USER_NAME=localStorage.getItem('balicky_user_name')||'';
+}
+function logoutUser(){
+  clearUndoAction();
+  CURRENT_USER='';
+  CURRENT_USER_NAME='';
+  CURRENT_PM=null;
+  CURRENT_PKG=null;
+  DATA=[]; CATALOG=[]; LOG=[];
+  MODIFIED=new Map();
+  DELETED_PKGS=new Map();
+  PKG_ORIGINAL=new Map();
+  localStorage.removeItem('balicky_login');
+  localStorage.removeItem('balicky_user_name');
+  document.getElementById('hPm').textContent='';
+  document.getElementById('hSaved').textContent='';
+  document.getElementById('hExport').classList.add('hidden');
+  document.getElementById('hReset').classList.add('hidden');
+  screenLoad();
 }
 function saveAuthToStorage(login,name){
   CURRENT_USER=String(login||'').trim().toLowerCase();
@@ -236,7 +273,8 @@ function serializeSession(){
   return {v:1, savedAt:new Date().toISOString(), pm:CURRENT_PM, country:CURRENT_COUNTRY, user:CURRENT_USER, user_name:CURRENT_USER_NAME, filename:FILENAME,
     data:DATA, log:LOG,
     modified:[...MODIFIED.entries()].map(([k,s])=>[k,[...s]]),
-    deleted:[...DELETED_PKGS.entries()]};
+    deleted:[...DELETED_PKGS.entries()],
+    pkgOriginal:[...PKG_ORIGINAL.entries()]};
 }
 function restoreSession(s){
   DATA=(s.data||[]).map((r,i)=>({__i:(r.__i!=null?r.__i:i),__status:r.__status||'',...r}));
@@ -246,6 +284,7 @@ function restoreSession(s){
   CURRENT_USER_NAME=s.user_name||CURRENT_USER_NAME||CURRENT_USER;
   MODIFIED=new Map((s.modified||[]).map(([k,a])=>[k,new Set(a)]));
   DELETED_PKGS=new Map(s.deleted||[]);
+  PKG_ORIGINAL=new Map(s.pkgOriginal||[]);
 }
 let saveT=null;
 function scheduleSave(){ clearTimeout(saveT); saveT=setTimeout(doSave,800); }
@@ -297,7 +336,7 @@ function loadSessionFile(ev){
 }
 function afterRestore(){
   document.getElementById('hPm').textContent='PM vlastník: '+(CURRENT_PM||'')+' · '+CURRENT_COUNTRY.toUpperCase()+' · uživatel: '+(CURRENT_USER_NAME||CURRENT_USER);
-  document.getElementById('hExport').classList.remove('hidden');
+  document.getElementById('hExport').classList.add('hidden');
   document.getElementById('hReset').classList.remove('hidden');
   clearUndoAction();
   scheduleSave(); screenPkgs();
@@ -363,6 +402,7 @@ function screenLoad(){
 }
 // automatické načtení balíčků z balicky.js (window.BALICKY = [[ID_BALICKU,ID_POLOZKY,NAZEV,NEAKTIVNI,PM],...])
 function loadBalickyData(B){
+  PKG_ORIGINAL=new Map();
   DATA=B.map((r,i)=>({__i:i,__status:'',
     [COL.pkg]:r[0],[COL.id]:r[1],[COL.name]:r[2],[COL.inactive]:r[3],[COL.pm]:r[4]}));
   FILENAME='balicky_'+CURRENT_COUNTRY+'.js';
@@ -377,6 +417,7 @@ function readFile(f){
     SHEET=WB.SheetNames[0];
     const rows=XLSX.utils.sheet_to_json(WB.Sheets[SHEET],{defval:''});
     if(!rows.length||!(COL.pkg in rows[0])){ alert('Soubor nemá očekávané sloupce ('+COL.pkg+', '+COL.id+', '+COL.name+'…).'); return; }
+    PKG_ORIGINAL=new Map();
     DATA=rows.map((r,i)=>({__i:i,__status:'',...r}));
     buildCatalog();
     screenPm();
@@ -400,6 +441,9 @@ function buildCatalog(){
 /* ---------- výběr PM ---------- */
 function screenPm(){
   const pms=[...new Set(DATA.map(r=>r[COL.pm]).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'cs'));
+  document.getElementById('hPm').textContent='Země: '+CURRENT_COUNTRY.toUpperCase()+' · uživatel: '+(CURRENT_USER_NAME||CURRENT_USER);
+  document.getElementById('hReset').classList.remove('hidden');
+  document.getElementById('hExport').classList.add('hidden');
   document.getElementById('app').innerHTML=`
     <div class="center">
       <h2>Vyberte vlastníka balíčků (PM)</h2>
@@ -412,7 +456,7 @@ function screenPm(){
 async function pickPm(){
   CURRENT_PM=document.getElementById('pmSel').value;
   document.getElementById('hPm').textContent='PM vlastník: '+CURRENT_PM+' · '+CURRENT_COUNTRY.toUpperCase()+' · uživatel: '+(CURRENT_USER_NAME||CURRENT_USER);
-  document.getElementById('hExport').classList.remove('hidden');
+  document.getElementById('hExport').classList.add('hidden');
   document.getElementById('hReset').classList.remove('hidden');
   clearUndoAction();
   const restored=await loadSavedSessionForPm();
@@ -461,34 +505,41 @@ function screenPkgs(){
     <div class="toolbar">
       <input type="text" class="grow" id="pkgFilter" placeholder="Filtrovat balíčky…" oninput="filterPkgs()">
       <button class="btn sec sm" onclick="screenDeleted()">🗑 Smazané balíčky (${delMine})</button>
-      <button class="btn sec sm" onclick="saveSessionFile()" title="Uložit rozpracovanou práci jako soubor (přenos mezi PC)">💾 Uložit rozpracované</button>
-      <button class="btn sec sm" onclick="document.getElementById('sessFile').click()" title="Načíst rozpracovanou práci ze souboru">📂 Načíst rozpracované</button>
-      <input type="file" id="sessFile" accept=".json" class="hidden" onchange="loadSessionFile(event)">
     </div>
+    <details class="card" style="margin-bottom:14px;padding:10px 12px">
+      <summary style="cursor:pointer;font-weight:600">Pokročilé</summary>
+      <div class="toolbar" style="margin-top:10px">
+        <button class="btn sec sm" onclick="exportXlsx()" title="Stáhnout aktualizovaný XLSX se změnami a logem">💾 Uložit změny</button>
+        <button class="btn sec sm" onclick="saveSessionFile()" title="Uložit rozpracovanou práci jako soubor (přenos mezi PC)">💾 Uložit rozpracované</button>
+        <button class="btn sec sm" onclick="document.getElementById('sessFile').click()" title="Načíst rozpracovanou práci ze souboru">📂 Načíst rozpracované</button>
+        <input type="file" id="sessFile" accept=".json" class="hidden" onchange="loadSessionFile(event)">
+      </div>
+    </details>
     <div class="toolbar">
       <span style="color:var(--muted);font-size:13px">Import do Agendy (upravené balíčky):</span>
       <button class="btn sm" onclick="erpExportZip()">📤 Import do Agendy (ZIP po balíčcích)</button>
       <button class="btn sm sec" onclick="exportOverview()">📄 Přehled (XLSX)</button>
     </div>
-    <div class="note" style="background:#fff7e6;border-color:#ffd98a;color:#7a4a00">
-      Import = ZIP se samostatným souborem pro <b>každý balíček, který jste změnil</b> (${modMine}). Každý soubor je <b>.txt, oddělený tabulátory, kódování Windows-1250</b>, se sloupci <b>ID</b> a <b>POPIS</b> – přesně jak Agenda očekává. V ZIPu je i soupis <b>_SEZNAM_balicku</b>. „Přehled" je jen XLSX pro vaši kontrolu (ne pro import).
-    </div>
     <div id="pkgList">${list.map(p=>pkgRow(p)).join('')||'<div class="empty">Žádné balíčky.</div>'}</div>`;
 }
 function pkgRow(p){
   const mod=MODIFIED.has(p.name);
+  const original=originalPkgName(p.name);
   const stateTag = mod
     ? (p.oldN
       ? '<span class="tag old">rozpracováno</span>'
       : '<span class="tag done">upraveno</span>')
     : '';
   const nm=esc(p.name).replace(/'/g,"\\'");
+  const renamedNote=original!==p.name?`<span class="meta">původně: ${esc(original)}</span>`:'';
   return `<div class="pkg" data-name="${esc(p.name).toLowerCase()}">
     <span class="name" style="cursor:pointer" onclick="openPkg('${nm}')">${esc(p.name)}</span>
+    ${renamedNote}
     <span class="meta">${p.items.filter(r=>r.__status!=='deleted').length} položek</span>
     ${p.shared?'<span class="tag" style="background:#e7e0ff;color:#4b2db3" title="Balíček sdílený více PM">sdílený</span>':''}
     ${stateTag}
     <span class="badge ${p.oldN?'':'zero'}" onclick="openPkg('${nm}')" style="cursor:pointer">${p.oldN?p.oldN+' starých':'hotovo'}</span>
+    <button class="btn sm sec" title="Přejmenovat balíček" onclick="renamePkgPrompt('${nm}')">✏</button>
     <button class="btn sm sec" title="Smazat celý balíček" onclick="deletePkg('${nm}')">🗑</button>
   </div>`;
 }
@@ -537,12 +588,16 @@ function screenPkg(){
   const shareNote = otherPms.length
     ? `<div class="note">Tento balíček je <b>sdílený</b> i s: ${esc(otherPms.join(', '))}. Zobrazené jsou <b>všechny</b> položky balíčku, protože Agenda nahrazuje celý balíček – přesně to se vyexportuje do importu. Cizí položky můžete nechat beze změny.</div>`
     : '';
+  const origName=originalPkgName(CURRENT_PKG);
+  const renamedInfo=origName!==CURRENT_PKG?`<div class="note" style="margin-top:8px">Původní název: <b>${esc(origName)}</b> → Nový název: <b>${esc(CURRENT_PKG)}</b></div>`:'';
   document.getElementById('app').innerHTML=`
     <div class="crumb" style="display:flex;align-items:center;gap:10px">
       <span style="flex:1"><a onclick="screenPkgs()">← Balíčky</a> / ${esc(CURRENT_PKG)}</span>
+      <button class="btn sm sec" onclick="renamePkgPrompt('${esc(CURRENT_PKG).replace(/'/g,"\\'")}')">✏ Přejmenovat balíček</button>
       <button class="btn sm" onclick="openAddNew()" title="Přidat do balíčku úplně novou položku z katalogu">➕ Přidat položku</button>
       <button class="btn sm sec" onclick="erpExportOnePkg()" title="Stáhnout importní .txt pro Agendu jen pro tento balíček">📤 Soubor pro Agendu</button>
     </div>
+    ${renamedInfo}
     ${shareNote}
     <div class="card">
       <table>
@@ -686,6 +741,44 @@ function undoDone(i){
   }
   clearUndoAction();
   scheduleSave(); screenPkg();
+}
+function renamePkgPrompt(name){
+  const oldName=String(name||'').trim();
+  if(!oldName) return;
+  const next=prompt('Nový název balíčku:',oldName);
+  if(next==null) return;
+  const newName=String(next).trim();
+  if(!newName || newName===oldName) return;
+  const exists=DATA.some(r=>r[COL.pkg]===newName);
+  if(exists){ alert('Balíček s tímto názvem už existuje.'); return; }
+  const meta=snapshotMeta();
+  const rows=DATA.filter(r=>r[COL.pkg]===oldName);
+  if(!rows.length){ alert('Balíček nebyl nalezen.'); return; }
+  rows.forEach(r=>{ r[COL.pkg]=newName; });
+  const original=originalPkgName(oldName);
+  PKG_ORIGINAL.delete(oldName);
+  if(original!==newName) PKG_ORIGINAL.set(newName,original);
+  if(MODIFIED.has(oldName)){
+    MODIFIED.set(newName,MODIFIED.get(oldName));
+    MODIFIED.delete(oldName);
+  }
+  if(DELETED_PKGS.has(oldName)){
+    DELETED_PKGS.set(newName,DELETED_PKGS.get(oldName));
+    DELETED_PKGS.delete(oldName);
+  }
+  if(CURRENT_PKG===oldName) CURRENT_PKG=newName;
+  markModified(newName,CURRENT_PM);
+  LOG.push({cas:now(),pm:CURRENT_PM,akce:'přejmenování balíčku',balicek:newName,
+    stara_id:'',stary_nazev:oldName,nova_id:'',novy_nazev:newName,propagace:''});
+  setUndoAction(()=>{
+    DATA.filter(r=>r[COL.pkg]===newName).forEach(r=>{ r[COL.pkg]=oldName; });
+    restoreMeta(meta);
+    CURRENT_PKG=(CURRENT_PKG===newName?oldName:CURRENT_PKG);
+    scheduleSave();
+    if(CURRENT_PKG===oldName) screenPkg(); else screenPkgs();
+  },'přejmenování balíčku');
+  scheduleSave();
+  if(CURRENT_PKG===newName) screenPkg(); else screenPkgs();
 }
 // rychlá záměna kliknutím na navržený štítek
 function quickReplace(i,k){
@@ -905,11 +998,11 @@ async function erpExportZip(){
   const index=names.map((name,i)=>({
     poradi:String(i+1).padStart(pad,'0'),
     SOUBOR:String(i+1).padStart(pad,'0')+'_'+safeName(name)+'.txt',
-    ID_BALICKU:name, POCET_POLOZEK:itemsOfPkg(name).length,
+    ID_BALICKU:name, PUVODNI_NAZEV_BALICKU:originalPkgName(name), POCET_POLOZEK:itemsOfPkg(name).length,
     SDILENY:isShared(name)?'ANO':'', SDILENO_S:otherPmsOf(name).join(', '), PM:CURRENT_PM }));
   zip.file('_SEZNAM_balicku.csv',
-    '﻿'+['poradi;SOUBOR;ID_BALICKU;POCET_POLOZEK;SDILENY;SDILENO_S;PM']
-      .concat(index.map(r=>[r.poradi,r.SOUBOR,r.ID_BALICKU,r.POCET_POLOZEK,r.SDILENY,'"'+r.SDILENO_S+'"',r.PM].join(';'))).join('\r\n'));
+    '﻿'+['poradi;SOUBOR;ID_BALICKU;PUVODNI_NAZEV_BALICKU;POCET_POLOZEK;SDILENY;SDILENO_S;PM']
+      .concat(index.map(r=>[r.poradi,r.SOUBOR,r.ID_BALICKU,r.PUVODNI_NAZEV_BALICKU,r.POCET_POLOZEK,r.SDILENY,'"'+r.SDILENO_S+'"',r.PM].join(';'))).join('\r\n'));
   names.forEach((name,i)=>{
     const fn=String(i+1).padStart(pad,'0')+'_'+safeName(name)+'.txt';
     zip.file(fn,cp1250Bytes(erpTxt(itemsOfPkg(name))));   // TXT, TAB, CP1250
@@ -928,7 +1021,7 @@ function exportOverview(){
   const names=modifiedPkgNames();
   if(!names.length){ alert('Zatím jste neupravil žádný balíček.'); return; }
   const rows=names.flatMap(n=>DATA.filter(r=>r[COL.pkg]===n && r.__status!=='deleted')
-    .map(r=>({ID_BALICKU:r[COL.pkg],ID_POLOZKY:r[COL.id],NAZEV:r[COL.name],PM:r[COL.pm]})));
+    .map(r=>({ID_BALICKU:r[COL.pkg],PUVODNI_NAZEV_BALICKU:originalPkgName(r[COL.pkg]),ID_POLOZKY:r[COL.id],NAZEV:r[COL.name],PM:r[COL.pm]})));
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'prehled');
   XLSX.writeFile(wb,`prehled_upravenych_${safeName(CURRENT_PM)}_${stamp()}.xlsx`);

@@ -5,5 +5,12 @@
     "lastName": "Panak",
     "pin": "123456",
     "active": true
+  },
+  {
+    "login": "porkert.matej",
+    "firstName": "Matej",
+    "lastName": "Porkert",
+    "pin": "794977",
+    "active": true
   }
 ]
