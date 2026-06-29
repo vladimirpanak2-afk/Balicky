@@ -431,12 +431,17 @@ function screenPkgs(){
 }
 function pkgRow(p){
   const mod=MODIFIED.has(p.name);
+  const stateTag = mod
+    ? (p.oldN
+      ? '<span class="tag old">rozpracováno</span>'
+      : '<span class="tag done">upraveno</span>')
+    : '';
   const nm=esc(p.name).replace(/'/g,"\\'");
   return `<div class="pkg" data-name="${esc(p.name).toLowerCase()}">
     <span class="name" style="cursor:pointer" onclick="openPkg('${nm}')">${esc(p.name)}</span>
     <span class="meta">${p.items.filter(r=>r.__status!=='deleted').length} položek</span>
     ${p.shared?'<span class="tag" style="background:#e7e0ff;color:#4b2db3" title="Balíček sdílený více PM">sdílený</span>':''}
-    ${mod?'<span class="tag done">upraveno</span>':''}
+    ${stateTag}
     <span class="badge ${p.oldN?'':'zero'}" onclick="openPkg('${nm}')" style="cursor:pointer">${p.oldN?p.oldN+' starých':'hotovo'}</span>
     <button class="btn sm sec" title="Smazat celý balíček" onclick="deletePkg('${nm}')">🗑</button>
   </div>`;
