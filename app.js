@@ -8,6 +8,7 @@ let CURRENT_COUNTRY='sk';
 let CURRENT_USER='';
 let CURRENT_USER_NAME='';
 let CURRENT_PKG=null;
+let LAST_UNDO=null;
 let LOG=[];           // [{cas, pm, akce, balicek, stara_id, stary_nazev, nova_id, novy_nazev, propagace}]
 let MODIFIED=new Map();// název balíčku -> Set(PM), kteří balíček změnili (pro ERP import = kompletní stav)
 let DELETED_PKGS=new Map();// název balíčku -> {pm, pocet} smazané celé balíčky (ruční řešení v ERP)
@@ -30,6 +31,48 @@ async function apiJson(path,opt){
     if(!r.ok) return null;
     return await r.json();
   }catch(e){ return null; }
+}
+function cloneModifiedState(src){ return new Map([...src.entries()].map(([k,s])=>[k,new Set([...s])])); }
+function cloneDeletedState(src){ return new Map([...src.entries()].map(([k,v])=>[k,{...v}])); }
+function snapshotMeta(){ return {logLen:LOG.length, modified:cloneModifiedState(MODIFIED), deleted:cloneDeletedState(DELETED_PKGS)}; }
+function restoreMeta(meta){
+  LOG=LOG.slice(0,meta.logLen);
+  MODIFIED=cloneModifiedState(meta.modified);
+  DELETED_PKGS=cloneDeletedState(meta.deleted);
+}
+function setUndoAction(fn,label){
+  LAST_UNDO={fn,label:label||''};
+  const b=document.getElementById('hUndo');
+  if(b){ b.classList.remove('hidden'); b.title=label?('Zrušit: '+label):'Zrušit poslední změnu'; }
+}
+function clearUndoAction(){
+  LAST_UNDO=null;
+  const b=document.getElementById('hUndo');
+  if(b) b.classList.add('hidden');
+}
+function undoLastChange(){
+  if(!LAST_UNDO){ alert('Není co vrátit.'); return; }
+  const fn=LAST_UNDO.fn;
+  clearUndoAction();
+  fn();
+}
+function showHelp(){
+  alert(
+`Jak aplikaci používat:
+1) Přihlaste se loginem (prijmeni.jmeno) a 6místným PINem.
+2) Vyberte PM vlastníka balíčků.
+3) V každém balíčku nahraďte staré položky (ZZZ/!!!) přes Zaměnit nebo návrhy.
+4) Pokud uděláte chybu, použijte "↶ Zrušit poslední změnu".
+5) Po dokončení exportujte soubory pro Agendu.
+
+Stavy balíčku:
+- rozpracováno = balíček je změněný, ale ještě obsahuje staré položky
+- upraveno = všechny staré položky v balíčku jsou vyřešené
+
+Omezení:
+- Zrušit poslední změnu vrací jen poslední akci (1 krok zpět).
+- Sdílení práce je oddělené podle uživatele; jiný uživatel nevidí vaše rozpracované změny.`
+  );
 }
 function restoreAuthFromStorage(){
   CURRENT_USER=localStorage.getItem('balicky_login')||'';
@@ -256,11 +299,13 @@ function afterRestore(){
   document.getElementById('hPm').textContent='PM vlastník: '+(CURRENT_PM||'')+' · '+CURRENT_COUNTRY.toUpperCase()+' · uživatel: '+(CURRENT_USER_NAME||CURRENT_USER);
   document.getElementById('hExport').classList.remove('hidden');
   document.getElementById('hReset').classList.remove('hidden');
+  clearUndoAction();
   scheduleSave(); screenPkgs();
 }
 
 /* ---------- načtení ---------- */
 function screenLoad(){
+  clearUndoAction();
   document.getElementById('app').innerHTML = `
     <div class="center">
       <h2>Aktualizace produktových balíčků</h2>
@@ -369,6 +414,7 @@ async function pickPm(){
   document.getElementById('hPm').textContent='PM vlastník: '+CURRENT_PM+' · '+CURRENT_COUNTRY.toUpperCase()+' · uživatel: '+(CURRENT_USER_NAME||CURRENT_USER);
   document.getElementById('hExport').classList.remove('hidden');
   document.getElementById('hReset').classList.remove('hidden');
+  clearUndoAction();
   const restored=await loadSavedSessionForPm();
   if(!restored) screenPkgs();
   else afterRestore();
@@ -549,6 +595,8 @@ function applyReplace(old,pick,propagate){
   const targets = propagate
     ? DATA.filter(r=>r[COL.id]===oldId && isOld(r[COL.name]) && r.__status!=='done' && r.__status!=='deleted')
     : [old];
+  const before=targets.map(r=>({__i:r.__i,id:r[COL.id],name:r[COL.name],inactive:r[COL.inactive],status:r.__status}));
+  const meta=snapshotMeta();
   targets.forEach(r=>{
     LOG.push({cas:now(),pm:CURRENT_PM,akce:'záměna',balicek:r[COL.pkg],
       stara_id:r[COL.id],stary_nazev:r[COL.name],nova_id:pick.id,novy_nazev:pick.name,
@@ -556,10 +604,20 @@ function applyReplace(old,pick,propagate){
     r[COL.id]=pick.id; r[COL.name]=pick.name; r[COL.inactive]=0; r.__status='done';
     markModified(r[COL.pkg],r[COL.pm]);
   });
+  setUndoAction(()=>{
+    before.forEach(b=>{
+      const r=DATA.find(x=>x.__i===b.__i); if(!r) return;
+      r[COL.id]=b.id; r[COL.name]=b.name; r[COL.inactive]=b.inactive; r.__status=b.status;
+    });
+    restoreMeta(meta);
+    scheduleSave(); screenPkg();
+  },'poslední záměnu');
   scheduleSave();
   return targets.length;
 }
 function applyAdd(old,pick){
+  const meta=snapshotMeta();
+  const prev={__i:old.__i,status:old.__status};
   const newRow={__i:DATA.length,__status:'done',
     [COL.pkg]:old[COL.pkg],[COL.id]:pick.id,[COL.name]:pick.name,[COL.inactive]:0,[COL.pm]:CURRENT_PM};
   DATA.push(newRow);
@@ -567,15 +625,27 @@ function applyAdd(old,pick){
   markModified(old[COL.pkg],CURRENT_PM);
   LOG.push({cas:now(),pm:CURRENT_PM,akce:'přidání',balicek:old[COL.pkg],
     stara_id:old[COL.id],stary_nazev:old[COL.name],nova_id:pick.id,novy_nazev:pick.name,propagace:''});
+  setUndoAction(()=>{
+    DATA=DATA.filter(r=>r.__i!==newRow.__i);
+    const rr=DATA.find(x=>x.__i===prev.__i); if(rr) rr.__status=prev.status;
+    restoreMeta(meta);
+    scheduleSave(); screenPkg();
+  },'poslední přidání');
   scheduleSave();
 }
 function applyAddNew(pick){
+  const meta=snapshotMeta();
   const newRow={__i:DATA.length,__status:'done',
     [COL.pkg]:modalCtx.pkg,[COL.id]:pick.id,[COL.name]:pick.name,[COL.inactive]:0,[COL.pm]:CURRENT_PM};
   DATA.push(newRow);
   markModified(modalCtx.pkg,CURRENT_PM);
   LOG.push({cas:now(),pm:CURRENT_PM,akce:'přidání nové',balicek:modalCtx.pkg,
     stara_id:'',stary_nazev:'',nova_id:pick.id,novy_nazev:pick.name,propagace:''});
+  setUndoAction(()=>{
+    DATA=DATA.filter(r=>r.__i!==newRow.__i);
+    restoreMeta(meta);
+    scheduleSave(); screenPkg();
+  },'poslední přidání');
   scheduleSave();
 }
 function confirmPick(){
@@ -600,21 +670,37 @@ function quickReplace(i,k){
 /* ---------- mazání položek a balíčků ---------- */
 function deleteRow(i){
   const r=DATA.find(x=>x.__i===i); if(!r)return;
+  const meta=snapshotMeta();
+  const prev=r.__status;
   r.__status='deleted'; markModified(r[COL.pkg],r[COL.pm]);
   LOG.push({cas:now(),pm:CURRENT_PM,akce:'smazání položky',balicek:r[COL.pkg],
     stara_id:r[COL.id],stary_nazev:r[COL.name],nova_id:'',novy_nazev:'',propagace:''});
+  setUndoAction(()=>{
+    const rr=DATA.find(x=>x.__i===i); if(rr) rr.__status=prev;
+    restoreMeta(meta);
+    scheduleSave(); screenPkg();
+  },'smazání položky');
   scheduleSave(); screenPkg();
 }
 function undoRow(i){
   const r=DATA.find(x=>x.__i===i); if(!r)return;
+  const meta=snapshotMeta();
+  const prev=r.__status;
   r.__status='';
   LOG.push({cas:now(),pm:CURRENT_PM,akce:'vrácení smazání',balicek:r[COL.pkg],
     stara_id:r[COL.id],stary_nazev:r[COL.name],nova_id:'',novy_nazev:'',propagace:''});
+  setUndoAction(()=>{
+    const rr=DATA.find(x=>x.__i===i); if(rr) rr.__status=prev;
+    restoreMeta(meta);
+    scheduleSave(); screenPkg();
+  },'vrácení smazání');
   scheduleSave(); screenPkg();
 }
 function deletePkg(name){
   const items=DATA.filter(r=>r[COL.pkg]===name);   // celý balíček (napříč PM)
   const shared=new Set(items.map(r=>r[COL.pm])).size>1;
+  const meta=snapshotMeta();
+  const before=items.map(r=>({__i:r.__i,status:r.__status}));
   let msg='Smazat CELÝ balíček "'+name+'" ('+items.length+' položek)?\n\nBalíček se přesune do přehledu smazaných – v Agendě ho pak ručně zneaktivníte/smažete.';
   if(shared) msg+='\n\nPOZOR: balíček je sdílený i s jinými PM – smaže se celý.';
   if(!confirm(msg)) return;
@@ -623,14 +709,26 @@ function deletePkg(name){
   MODIFIED.delete(name); // smazané balíčky se neposílají do běžného importu
   LOG.push({cas:now(),pm:CURRENT_PM,akce:'smazání balíčku',balicek:name,
     stara_id:'',stary_nazev:items.length+' položek',nova_id:'',novy_nazev:'',propagace:''});
+  setUndoAction(()=>{
+    before.forEach(b=>{ const r=DATA.find(x=>x.__i===b.__i); if(r) r.__status=b.status; });
+    restoreMeta(meta);
+    scheduleSave(); screenPkgs();
+  },'smazání balíčku');
   scheduleSave(); screenPkgs();
 }
 function undoPkg(name){
   const info=DELETED_PKGS.get(name); if(!info)return;
+  const meta=snapshotMeta();
+  const before=DATA.filter(r=>r[COL.pkg]===name).map(r=>({__i:r.__i,status:r.__status}));
   DATA.filter(r=>r[COL.pkg]===name).forEach(r=>{ if(r.__status==='deleted') r.__status=''; });
   DELETED_PKGS.delete(name);
   LOG.push({cas:now(),pm:CURRENT_PM,akce:'vrácení balíčku',balicek:name,
     stara_id:'',stary_nazev:'',nova_id:'',novy_nazev:'',propagace:''});
+  setUndoAction(()=>{
+    before.forEach(b=>{ const r=DATA.find(x=>x.__i===b.__i); if(r) r.__status=b.status; });
+    restoreMeta(meta);
+    scheduleSave(); screenDeleted();
+  },'vrácení balíčku');
   scheduleSave(); screenDeleted();
 }
 
